@@ -23,6 +23,8 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false },
 });
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 const checkDbConnection = async () => {
   if (missingEnvKeys.length > 0) {
     return {
@@ -53,5 +55,26 @@ const checkDbConnection = async () => {
   }
 };
 
+const checkDbConnectionWithRetry = async (
+  retries = Number(process.env.DB_CONNECT_RETRIES || 3),
+  delayMs = Number(process.env.DB_CONNECT_RETRY_DELAY_MS || 1500),
+) => {
+  let lastResult;
+
+  for (let attempt = 1; attempt <= retries; attempt += 1) {
+    lastResult = await checkDbConnection();
+    if (lastResult.ok) {
+      return { ...lastResult, attempts: attempt };
+    }
+
+    if (attempt < retries) {
+      await sleep(delayMs);
+    }
+  }
+
+  return { ...lastResult, attempts: retries };
+};
+
 module.exports = pool;
 module.exports.checkDbConnection = checkDbConnection;
+module.exports.checkDbConnectionWithRetry = checkDbConnectionWithRetry;

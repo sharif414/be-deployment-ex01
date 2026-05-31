@@ -200,6 +200,48 @@ npm start
 - Missing fields in request body
 - Invalid pagination (`page<=0` or `limit<=0`)
 
+## Error Testing With curl
+
+Use these exact commands to test error handling behavior.
+
+### 1) 404 Not Found (undefined route)
+
+```bash
+curl -i "http://localhost:3000/not-a-real-route"
+```
+
+Expected:
+
+- HTTP status: `404`
+- JSON body with `status: "fail"`
+
+### 2) 400 Bad Request (invalid POST /users payload)
+
+```bash
+curl -i -X POST "http://localhost:3000/api/v1/users" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"","email":"invalid-email","age":-1}'
+```
+
+Expected:
+
+- HTTP status: `400`
+- JSON validation message (name/email/age invalid)
+
+### 3) 500 Internal Server Error (simulated DB query error)
+
+```bash
+curl -i -X POST "http://localhost:3000/api/v1/users" \
+  -H "Content-Type: application/json" \
+  -H "x-simulate-db-error: true" \
+  -d '{"name":"Test","email":"test500@example.com","age":25}'
+```
+
+Expected:
+
+- HTTP status: `500`
+- JSON message: `"Simulated database query failure"`
+
 ## Common Issues
 
 ### 1) `db down: getaddrinfo ENOTFOUND ...`

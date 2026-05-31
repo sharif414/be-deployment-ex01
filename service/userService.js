@@ -1,4 +1,5 @@
 let pool;
+const { createError } = require("../utils/errors");
 
 try {
   pool = require("../db/pool");
@@ -19,22 +20,46 @@ const validateUser = ({ name, email, age }) => {
     return "Email is required and must be a valid email address";
   }
 
-  if (age === undefined || isNaN(Number(age)) || Number(age) <= 0) {
+  if (age === undefined || Number.isNaN(Number(age)) || Number(age) <= 0) {
     return "Age is required and must be a positive number";
   }
 
   return null;
 };
 
-exports.getAllUsers = async (req, res) => {
+const ensureDbPool = () => {
   if (!pool) {
-    return res.status(503).json({
-      status: "error",
-      message: "Database connection not available",
-    });
+    throw createError("Database connection not available", 503, "error");
   }
+};
 
+const shouldSimulateDbError = (req) => {
+  return (
+    process.env.SIMULATE_DB_QUERY_ERROR === "true" ||
+    req.headers["x-simulate-db-error"] === "true" ||
+    req.query.simulateDbError === "true"
+  );
+};
+
+const maybeThrowSimulatedDbError = (req) => {
+  if (shouldSimulateDbError(req)) {
+    throw createError("Simulated database query failure", 500, "error");
+  }
+};
+
+const toQueryError = (err, fallbackMessage) => {
+  if (err.statusCode) return err;
+  if (err.code === "23505") {
+    return createError("Email already exists", 400, "fail");
+  }
+  return createError(fallbackMessage, 500, "error", { cause: err.message });
+};
+
+exports.getAllUsers = async (req, res, next) => {
   try {
+    ensureDbPool();
+    maybeThrowSimulatedDbError(req);
+
     const {
       age,
       name,
@@ -49,27 +74,24 @@ exports.getAllUsers = async (req, res) => {
     const allowedOrder = ["asc", "desc"];
 
     if (!allowedSortFields.includes(sortBy)) {
-      return res.status(400).json({
-        status: "fail",
-        message: "Invalid sortBy. Allowed values are id, name, email, age",
-      });
+      return next(
+        createError(
+          "Invalid sortBy. Allowed values are id, name, email, age",
+          400,
+          "fail",
+        ),
+      );
     }
 
     if (!allowedOrder.includes(order.toLowerCase())) {
-      return res.status(400).json({
-        status: "fail",
-        message: "Invalid order. Allowed values are asc or desc",
-      });
+      return next(createError("Invalid order. Allowed values are asc or desc", 400, "fail"));
     }
 
     const pageNumber = Number(page);
     const limitNumber = Number(limit);
 
     if (pageNumber <= 0 || limitNumber <= 0) {
-      return res.status(400).json({
-        status: "fail",
-        message: "Page and limit must be positive numbers",
-      });
+      return next(createError("Page and limit must be positive numbers", 400, "fail"));
     }
 
     let sql = "SELECT * FROM public.users WHERE 1=1";
@@ -93,7 +115,6 @@ exports.getAllUsers = async (req, res) => {
     const offset = (pageNumber - 1) * limitNumber;
 
     sql += ` ORDER BY ${sortBy} ${order.toUpperCase()}`;
-
     values.push(limitNumber);
     sql += ` LIMIT $${values.length}`;
 
@@ -110,34 +131,20 @@ exports.getAllUsers = async (req, res) => {
       data: response.rows,
     });
   } catch (err) {
-    console.error("Database error:", err.message);
-
-    return res.status(500).json({
-      status: "error",
-      message: "Server error while retrieving users",
-      error: err.message,
-    });
+    return next(toQueryError(err, "Server error while retrieving users"));
   }
 };
 
-exports.createUser = async (req, res) => {
-  if (!pool) {
-    return res.status(503).json({
-      status: "error",
-      message: "Database connection not available",
-    });
-  }
-
+exports.createUser = async (req, res, next) => {
   try {
-    const { name, email, age } = req.body;
+    ensureDbPool();
+    maybeThrowSimulatedDbError(req);
 
+    const { name, email, age } = req.body;
     const validationError = validateUser({ name, email, age });
 
     if (validationError) {
-      return res.status(400).json({
-        status: "fail",
-        message: validationError,
-      });
+      return next(createError(validationError, 400, "fail"));
     }
 
     const sql = `
@@ -147,7 +154,6 @@ exports.createUser = async (req, res) => {
     `;
 
     const values = [name, email, Number(age)];
-
     const response = await pool.query(sql, values);
 
     return res.status(201).json({
@@ -156,51 +162,27 @@ exports.createUser = async (req, res) => {
       data: response.rows[0],
     });
   } catch (err) {
-    console.error("Database error:", err.message);
-
-    if (err.code === "23505") {
-      return res.status(400).json({
-        status: "fail",
-        message: "Email already exists",
-      });
-    }
-
-    return res.status(500).json({
-      status: "error",
-      message: "Server error while creating user",
-      error: err.message,
-    });
+    return next(toQueryError(err, "Server error while creating user"));
   }
 };
 
-exports.getUserById = async (req, res) => {
-  if (!pool) {
-    return res.status(503).json({
-      status: "error",
-      message: "Database connection not available",
-    });
-  }
-
+exports.getUserById = async (req, res, next) => {
   try {
+    ensureDbPool();
+    maybeThrowSimulatedDbError(req);
+
     const id = Number(req.params.id);
 
     if (!id || id <= 0) {
-      return res.status(400).json({
-        status: "fail",
-        message: "Invalid user id",
-      });
+      return next(createError("Invalid user id", 400, "fail"));
     }
 
     const sql = "SELECT * FROM public.users WHERE id = $1";
     const values = [id];
-
     const response = await pool.query(sql, values);
 
     if (response.rowCount === 0) {
-      return res.status(404).json({
-        status: "fail",
-        message: "User not found",
-      });
+      return next(createError("User not found", 404, "fail"));
     }
 
     return res.status(200).json({
@@ -208,43 +190,26 @@ exports.getUserById = async (req, res) => {
       data: response.rows[0],
     });
   } catch (err) {
-    console.error("Database error:", err.message);
-
-    return res.status(500).json({
-      status: "error",
-      message: "Server error while retrieving user",
-      error: err.message,
-    });
+    return next(toQueryError(err, "Server error while retrieving user"));
   }
 };
 
-exports.updateUser = async (req, res) => {
-  if (!pool) {
-    return res.status(503).json({
-      status: "error",
-      message: "Database connection not available",
-    });
-  }
-
+exports.updateUser = async (req, res, next) => {
   try {
+    ensureDbPool();
+    maybeThrowSimulatedDbError(req);
+
     const id = Number(req.params.id);
 
     if (!id || id <= 0) {
-      return res.status(400).json({
-        status: "fail",
-        message: "Invalid user id",
-      });
+      return next(createError("Invalid user id", 400, "fail"));
     }
 
     const { name, email, age } = req.body;
-
     const validationError = validateUser({ name, email, age });
 
     if (validationError) {
-      return res.status(400).json({
-        status: "fail",
-        message: validationError,
-      });
+      return next(createError(validationError, 400, "fail"));
     }
 
     const sql = `
@@ -257,14 +222,10 @@ exports.updateUser = async (req, res) => {
     `;
 
     const values = [name, email, Number(age), id];
-
     const response = await pool.query(sql, values);
 
     if (response.rowCount === 0) {
-      return res.status(404).json({
-        status: "fail",
-        message: "User not found",
-      });
+      return next(createError("User not found", 404, "fail"));
     }
 
     return res.status(200).json({
@@ -273,51 +234,27 @@ exports.updateUser = async (req, res) => {
       data: response.rows[0],
     });
   } catch (err) {
-    console.error("Database error:", err.message);
-
-    if (err.code === "23505") {
-      return res.status(400).json({
-        status: "fail",
-        message: "Email already exists",
-      });
-    }
-
-    return res.status(500).json({
-      status: "error",
-      message: "Server error while updating user",
-      error: err.message,
-    });
+    return next(toQueryError(err, "Server error while updating user"));
   }
 };
 
-exports.deleteUserById = async (req, res) => {
-  if (!pool) {
-    return res.status(503).json({
-      status: "error",
-      message: "Database connection not available",
-    });
-  }
-
+exports.deleteUserById = async (req, res, next) => {
   try {
+    ensureDbPool();
+    maybeThrowSimulatedDbError(req);
+
     const id = Number(req.params.id);
 
     if (!id || id <= 0) {
-      return res.status(400).json({
-        status: "fail",
-        message: "Invalid user id",
-      });
+      return next(createError("Invalid user id", 400, "fail"));
     }
 
     const sql = "DELETE FROM public.users WHERE id = $1 RETURNING *";
     const values = [id];
-
     const response = await pool.query(sql, values);
 
     if (response.rowCount === 0) {
-      return res.status(404).json({
-        status: "fail",
-        message: "User not found",
-      });
+      return next(createError("User not found", 404, "fail"));
     }
 
     return res.status(200).json({
@@ -326,54 +263,34 @@ exports.deleteUserById = async (req, res) => {
       data: response.rows[0],
     });
   } catch (err) {
-    console.error("Database error:", err.message);
-
-    return res.status(500).json({
-      status: "error",
-      message: "Server error while deleting user",
-      error: err.message,
-    });
+    return next(toQueryError(err, "Server error while deleting user"));
   }
 };
 
-exports.createBulkUsers = async (req, res) => {
-  if (!pool) {
-    return res.status(503).json({
-      status: "error",
-      message: "Database connection not available",
-    });
-  }
-
+exports.createBulkUsers = async (req, res, next) => {
   try {
+    ensureDbPool();
+    maybeThrowSimulatedDbError(req);
+
     const users = req.body;
 
     if (!Array.isArray(users) || users.length === 0) {
-      return res.status(400).json({
-        status: "fail",
-        message: "Request body must be a non-empty array of users",
-      });
+      return next(createError("Request body must be a non-empty array of users", 400, "fail"));
     }
 
     for (const user of users) {
       const validationError = validateUser(user);
 
       if (validationError) {
-        return res.status(400).json({
-          status: "fail",
-          message: validationError,
-          invalidUser: user,
-        });
+        return next(createError(validationError, 400, "fail", { invalidUser: user }));
       }
     }
 
     const values = [];
-
     const placeholders = users
       .map((user, index) => {
         const baseIndex = index * 3;
-
         values.push(user.name, user.email, Number(user.age));
-
         return `($${baseIndex + 1}, $${baseIndex + 2}, $${baseIndex + 3})`;
       })
       .join(", ");
@@ -393,19 +310,9 @@ exports.createBulkUsers = async (req, res) => {
       data: response.rows,
     });
   } catch (err) {
-    console.error("Database error:", err.message);
-
     if (err.code === "23505") {
-      return res.status(400).json({
-        status: "fail",
-        message: "One or more emails already exist",
-      });
+      return next(createError("One or more emails already exist", 400, "fail"));
     }
-
-    return res.status(500).json({
-      status: "error",
-      message: "Server error while creating bulk users",
-      error: err.message,
-    });
+    return next(toQueryError(err, "Server error while creating bulk users"));
   }
 };
