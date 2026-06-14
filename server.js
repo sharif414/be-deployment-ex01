@@ -3,6 +3,7 @@ const morgan = require("morgan");
 const dotenv = require("dotenv");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
+const hpp = require("hpp");
 
 dotenv.config({ path: "./config.env" });
 
@@ -22,6 +23,7 @@ const limiter = rateLimit({
 
 app.use(limiter);
 app.use(helmet());
+app.use(hpp());
 app.use(express.json({ limit: "10kb" })); // Limit JSON body to 10kb
 app.use(morgan("dev"));
 app.use(express.static("./public"));
