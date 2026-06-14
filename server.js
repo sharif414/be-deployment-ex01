@@ -28,6 +28,13 @@ app.use(express.json({ limit: "10kb" })); // Limit JSON body to 10kb
 app.use(morgan("dev"));
 app.use(express.static("./public"));
 
+app.get("/", (req, res) => {
+  res.status(200).json({
+    status: "success",
+    message: "API is running",
+  });
+});
+
 app.use("/api/v1/users", router);
 app.use("/api/v1/customers", customerRouter);
 

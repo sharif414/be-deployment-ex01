@@ -12,16 +12,26 @@ const requiredEnvKeys = [
   "DB_PASSWORD",
 ];
 
-const missingEnvKeys = requiredEnvKeys.filter((key) => !process.env[key]);
+const hasDatabaseUrl = Boolean(process.env.DATABASE_URL);
+const missingEnvKeys = hasDatabaseUrl
+  ? []
+  : requiredEnvKeys.filter((key) => !process.env[key]);
 
-const pool = new Pool({
-  host: process.env.DB_HOST,
-  port: process.env.DB_PORT,
-  database: process.env.DB_NAME,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  ssl: { rejectUnauthorized: false },
-});
+const pool = new Pool(
+  hasDatabaseUrl
+    ? {
+        connectionString: process.env.DATABASE_URL,
+        ssl: { rejectUnauthorized: false },
+      }
+    : {
+        host: process.env.DB_HOST,
+        port: process.env.DB_PORT,
+        database: process.env.DB_NAME,
+        user: process.env.DB_USER,
+        password: process.env.DB_PASSWORD,
+        ssl: { rejectUnauthorized: false },
+      },
+);
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -33,8 +43,11 @@ const checkDbConnection = async () => {
     };
   }
 
+  const host = hasDatabaseUrl
+    ? new URL(process.env.DATABASE_URL).hostname
+    : process.env.DB_HOST;
+
   try {
-    const host = process.env.DB_HOST;
     const resolved = await dns.lookup(host);
     const result = await pool.query("SELECT 1 AS health");
 
@@ -48,7 +61,7 @@ const checkDbConnection = async () => {
   } catch (err) {
     return {
       ok: false,
-      host: process.env.DB_HOST,
+      host,
       code: err.code,
       reason: err.message,
     };
